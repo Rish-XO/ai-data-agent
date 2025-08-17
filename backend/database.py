@@ -3,6 +3,7 @@ from psycopg2.extras import RealDictCursor
 from typing import List, Dict, Any, Optional
 from config import DATABASE_URL
 from models import Candidate
+from embeddings_manager import embeddings_manager
 import logging
 import json
 
@@ -30,11 +31,26 @@ class Database:
                             email VARCHAR(255) UNIQUE,
                             phone VARCHAR(50),
                             skills TEXT,
+                            skill_embeddings TEXT,
                             experience_years INTEGER DEFAULT 0,
                             "current_role" VARCHAR(255),
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         )
                     """)
+                    
+                    # Add skill_embeddings column if it doesn't exist (for existing databases)
+                    cursor.execute("""
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_name='candidates' AND column_name='skill_embeddings'
+                    """)
+                    
+                    if not cursor.fetchone():
+                        cursor.execute("""
+                            ALTER TABLE candidates 
+                            ADD COLUMN skill_embeddings TEXT
+                        """)
+                        logger.info("Added skill_embeddings column to existing table")
                     conn.commit()
                     logger.info("Database initialized successfully")
         except Exception as e:
@@ -48,15 +64,23 @@ class Database:
                     # Convert skills list to JSON string
                     skills_json = json.dumps(candidate.skills)
                     
+                    # Create embeddings for skills
+                    skill_embeddings = {}
+                    for skill in candidate.skills:
+                        embedding = embeddings_manager.create_embedding(skill)
+                        skill_embeddings[skill] = embedding.tolist()
+                    skill_embeddings_json = json.dumps(skill_embeddings)
+                    
                     # Insert or update on conflict (email)
                     cursor.execute("""
-                        INSERT INTO candidates (name, email, phone, skills, experience_years, "current_role")
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        INSERT INTO candidates (name, email, phone, skills, skill_embeddings, experience_years, "current_role")
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (email) 
                         DO UPDATE SET 
                             name = EXCLUDED.name,
                             phone = EXCLUDED.phone,
                             skills = EXCLUDED.skills,
+                            skill_embeddings = EXCLUDED.skill_embeddings,
                             experience_years = EXCLUDED.experience_years,
                             "current_role" = EXCLUDED."current_role"
                         RETURNING *
@@ -65,6 +89,7 @@ class Database:
                         candidate.email,
                         candidate.phone,
                         skills_json,
+                        skill_embeddings_json,
                         candidate.experience_years,
                         candidate.current_role
                     ))
@@ -104,6 +129,58 @@ class Database:
         except Exception as e:
             logger.error(f"Error fetching candidates: {e}")
             return []
+    
+    def search_by_skill_semantic(self, skill: str) -> List[Dict[str, Any]]:
+        """Search candidates by skill using semantic similarity"""
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Get all candidates with embeddings
+                    cursor.execute("""
+                        SELECT * FROM candidates 
+                        WHERE skill_embeddings IS NOT NULL
+                        ORDER BY created_at DESC
+                    """)
+                    
+                    all_candidates = cursor.fetchall()
+                    
+                    if not all_candidates:
+                        return []
+                    
+                    # Prepare for semantic search
+                    candidate_skills_list = []
+                    candidates_data = []
+                    
+                    for candidate in all_candidates:
+                        candidate_dict = dict(candidate)
+                        if candidate_dict.get('skills'):
+                            skills = json.loads(candidate_dict['skills'])
+                            candidate_skills_list.append(skills)
+                            candidates_data.append(candidate_dict)
+                    
+                    # Perform semantic search
+                    results = embeddings_manager.search_candidates_semantic(
+                        skill, 
+                        candidate_skills_list,
+                        top_k=20
+                    )
+                    
+                    # Return matched candidates
+                    matched_candidates = []
+                    for idx, score in results:
+                        if score > 0.5:  # Similarity threshold
+                            candidate = candidates_data[idx]
+                            candidate['similarity_score'] = score
+                            if candidate.get('skills'):
+                                candidate['skills'] = json.loads(candidate['skills'])
+                            matched_candidates.append(candidate)
+                    
+                    logger.info(f"Found {len(matched_candidates)} candidates semantically similar to: {skill}")
+                    return matched_candidates
+                    
+        except Exception as e:
+            logger.error(f"Error in semantic search: {e}")
+            return self.search_by_skill(skill)  # Fallback to exact search
     
     def search_by_skill(self, skill: str) -> List[Dict[str, Any]]:
         """Search candidates by skill"""

@@ -7,6 +7,7 @@ from langchain.prompts import PromptTemplate
 from transformers import pipeline
 from models import Candidate
 from config import HUGGINGFACE_API_TOKEN
+from embeddings_manager import embeddings_manager
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -166,19 +167,28 @@ JSON:"""
                     name = line
                     break
         
-        # Skills extraction
-        common_skills = [
-            "Python", "Java", "JavaScript", "TypeScript", "React", "Angular", 
-            "Vue", "Node.js", "Django", "FastAPI", "Flask", "SQL", "PostgreSQL", 
-            "MongoDB", "Docker", "Kubernetes", "AWS", "Azure", "GCP", "Git",
-            "HTML", "CSS", "C++", "C#", ".NET", "Spring", "Linux"
-        ]
+        # Skills extraction using semantic embeddings
+        # First try semantic extraction
+        semantic_skills = embeddings_manager.extract_skills_semantic(text, threshold=0.7)
         
-        found_skills = []
-        text_lower = text.lower()
-        for skill in common_skills:
-            if skill.lower() in text_lower:
-                found_skills.append(skill)
+        # Fallback: Basic keyword extraction
+        if not semantic_skills:
+            common_skills = [
+                "Python", "Java", "JavaScript", "TypeScript", "React", "Angular", 
+                "Vue", "Node.js", "Django", "FastAPI", "Flask", "SQL", "PostgreSQL", 
+                "MongoDB", "Docker", "Kubernetes", "AWS", "Azure", "GCP", "Git",
+                "HTML", "CSS", "C++", "C#", ".NET", "Spring", "Linux"
+            ]
+            
+            found_skills = []
+            text_lower = text.lower()
+            for skill in common_skills:
+                if skill.lower() in text_lower:
+                    found_skills.append(skill)
+        else:
+            # Normalize skills to canonical forms
+            found_skills = embeddings_manager.normalize_skills(semantic_skills)
+            logger.info(f"Extracted {len(found_skills)} skills using semantic embeddings")
         
         # Experience extraction
         experience_patterns = [

@@ -9,3 +9,6 @@ langchain
 langchain-community
 transformers
 huggingface_hub
+sentence-transformers
+numpy
+scikit-learn
