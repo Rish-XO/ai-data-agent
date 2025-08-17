@@ -31,7 +31,7 @@ class Database:
                             phone VARCHAR(50),
                             skills TEXT,
                             experience_years INTEGER DEFAULT 0,
-                            current_role VARCHAR(255),
+                            "current_role" VARCHAR(255),
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         )
                     """)
@@ -50,7 +50,7 @@ class Database:
                     
                     # Insert or update on conflict (email)
                     cursor.execute("""
-                        INSERT INTO candidates (name, email, phone, skills, experience_years, current_role)
+                        INSERT INTO candidates (name, email, phone, skills, experience_years, "current_role")
                         VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (email) 
                         DO UPDATE SET 
@@ -58,7 +58,7 @@ class Database:
                             phone = EXCLUDED.phone,
                             skills = EXCLUDED.skills,
                             experience_years = EXCLUDED.experience_years,
-                            current_role = EXCLUDED.current_role
+                            "current_role" = EXCLUDED."current_role"
                         RETURNING *
                     """, (
                         candidate.name,

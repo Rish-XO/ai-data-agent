@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pypdf
+psycopg2-binary
+pydantic[email]
+python-multipart
+python-dotenv
+langchain
+langchain-community
+transformers
+huggingface_hub

@@ -7,7 +7,7 @@ from pathlib import Path
 import logging
 
 from models import Candidate
-from langchain_parser import ResumeParser
+from ai_langchain_parser import AIResumeParser
 from database import db
 
 # Setup logging
@@ -34,8 +34,8 @@ app.add_middleware(
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-# Initialize parser
-parser = ResumeParser()
+# Initialize AI parser
+parser = AIResumeParser()
 
 @app.get("/")
 def read_root():
