@@ -17,9 +17,20 @@ class AIResumeParser:
     """AI-powered resume parser using LangChain and HuggingFace"""
     
     def __init__(self):
-        # Skip heavy AI model loading for now - use semantic extraction instead
-        self.text_generator = None
-        logger.info("Using semantic embeddings extraction (faster than text generation)")
+        # Initialize faster AI model for text understanding
+        try:
+            # Use a smaller, faster model for text generation
+            self.text_generator = pipeline(
+                "text2text-generation",
+                model="google/flan-t5-base",
+                max_length=256,
+                temperature=0.3,
+                do_sample=False  # Deterministic output
+            )
+            logger.info("Fast AI model (FLAN-T5-base) loaded successfully")
+        except Exception as e:
+            logger.warning(f"Could not load AI model: {e}. Using fallback extraction.")
+            self.text_generator = None
         
         # Initialize text splitter for large documents
         self.text_splitter = RecursiveCharacterTextSplitter(
@@ -81,40 +92,62 @@ JSON:"""
         return [doc.page_content for doc in docs]
     
     def extract_with_ai(self, text: str) -> Dict[str, Any]:
-        """Extract information using AI model"""
+        """Extract information using AI model (FLAN-T5)"""
         if not self.text_generator:
             return self.fallback_extraction(text)
         
         try:
             # Limit text size for model processing
-            text_sample = text[:1500]  # First 1500 chars usually contain key info
+            text_sample = text[:1000]  # First 1000 chars for FLAN-T5
             
-            # Create prompt
-            prompt = self.extraction_prompt.format(resume_text=text_sample)
+            # Create structured prompt for FLAN-T5
+            prompt = f"""Extract information from this resume text and return as JSON:
+
+Text: {text_sample}
+
+Extract: name, email, phone, years of experience, current job title, technical skills
+
+Format as JSON:"""
             
-            # Generate response
-            logger.info("Generating AI response...")
+            # Generate response with FLAN-T5
+            logger.info("Generating AI response with FLAN-T5...")
             response = self.text_generator(
                 prompt,
-                max_new_tokens=200,
-                num_return_sequences=1,
-                pad_token_id=50256
+                max_length=200,
+                num_return_sequences=1
             )
             
             # Extract the generated text
             generated_text = response[0]['generated_text']
+            logger.info(f"AI generated: {generated_text[:100]}...")
             
-            # Find JSON in the response
+            # Try to find and parse JSON
             json_start = generated_text.find('{')
             json_end = generated_text.rfind('}') + 1
             
             if json_start != -1 and json_end > json_start:
                 json_str = generated_text[json_start:json_end]
-                extracted_data = json.loads(json_str)
-                logger.info("AI extraction successful")
-                return extracted_data
+                try:
+                    extracted_data = json.loads(json_str)
+                    logger.info("AI extraction successful")
+                    
+                    # Enhance with semantic skill extraction
+                    if extracted_data.get('skills'):
+                        # Use AI-extracted skills as base, then enhance with embeddings
+                        ai_skills = extracted_data['skills'] if isinstance(extracted_data['skills'], list) else [extracted_data['skills']]
+                        semantic_skills = embeddings_manager.extract_skills_semantic(text, threshold=0.7)
+                        
+                        # Combine and normalize
+                        all_skills = list(set(ai_skills + semantic_skills))
+                        extracted_data['skills'] = embeddings_manager.normalize_skills(all_skills)
+                        logger.info(f"Enhanced skills with embeddings: {len(extracted_data['skills'])} total")
+                    
+                    return extracted_data
+                except json.JSONDecodeError:
+                    logger.warning("Invalid JSON from AI, using fallback")
+                    return self.fallback_extraction(text)
             else:
-                logger.warning("No valid JSON found in AI response, using fallback")
+                logger.warning("No JSON found in AI response, using fallback")
                 return self.fallback_extraction(text)
                 
         except Exception as e:
@@ -178,17 +211,34 @@ JSON:"""
             found_skills = embeddings_manager.normalize_skills(semantic_skills)
             logger.info(f"Extracted {len(found_skills)} skills using semantic embeddings")
         
-        # Experience extraction
+        # Experience extraction - improved patterns
         experience_patterns = [
             r'(\d+)\+?\s*years?\s*(?:of\s*)?experience',
             r'experience\s*:?\s*(\d+)\+?\s*years?',
+            r'(\d+)\+?\s*years?\s*(?:in|with|of|working)',
+            r'over\s*(\d+)\s*years?',
+            r'(\d+)\s*years?\s*(?:in\s*)?(?:software|development|programming|tech)',
+            r'total\s*(?:of\s*)?(\d+)\s*years?',
         ]
         experience_years = 0
         for pattern in experience_patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 experience_years = int(match.group(1))
+                logger.info(f"Found experience: {experience_years} years using pattern: {pattern}")
                 break
+        
+        # Also check for date ranges like 2022-2024
+        if experience_years == 0:
+            date_pattern = r'(20\d{2})\s*[-–]\s*(20\d{2}|present|current)'
+            date_matches = re.findall(date_pattern, text, re.IGNORECASE)
+            if date_matches:
+                for start_year, end_year in date_matches:
+                    end = 2024 if end_year.lower() in ['present', 'current'] else int(end_year)
+                    years_diff = end - int(start_year)
+                    if years_diff > experience_years:
+                        experience_years = years_diff
+                        logger.info(f"Calculated experience from dates: {experience_years} years")
         
         return {
             "name": name,
@@ -240,9 +290,9 @@ JSON:"""
             if not text.strip():
                 raise ValueError("No text could be extracted from PDF")
             
-            # Step 2: Extract information (using fast fallback method)
-            logger.info("Extracting information using semantic analysis...")
-            extracted_data = self.fallback_extraction(text)
+            # Step 2: Extract information using AI + embeddings hybrid approach
+            logger.info("Extracting information using AI + semantic embeddings...")
+            extracted_data = self.extract_with_ai(text)
             
             # Step 3: Validate and clean data
             logger.info("Validating and normalizing data...")
