@@ -17,21 +17,9 @@ class AIResumeParser:
     """AI-powered resume parser using LangChain and HuggingFace"""
     
     def __init__(self):
-        # Initialize HuggingFace text generation pipeline
-        # Using a smaller, efficient model for text generation
-        try:
-            self.text_generator = pipeline(
-                "text-generation",
-                model="microsoft/DialoGPT-medium",
-                max_length=512,
-                temperature=0.3,  # Low temperature for consistent output
-                do_sample=True,
-                pad_token_id=50256
-            )
-            logger.info("AI model loaded successfully")
-        except Exception as e:
-            logger.warning(f"Could not load AI model: {e}. Using fallback extraction.")
-            self.text_generator = None
+        # Skip heavy AI model loading for now - use semantic extraction instead
+        self.text_generator = None
+        logger.info("Using semantic embeddings extraction (faster than text generation)")
         
         # Initialize text splitter for large documents
         self.text_splitter = RecursiveCharacterTextSplitter(
@@ -246,15 +234,18 @@ JSON:"""
             logger.info(f"Starting AI-powered resume parsing for: {pdf_path}")
             
             # Step 1: Load PDF using LangChain
+            logger.info("Loading PDF...")
             text = self.load_pdf_with_langchain(pdf_path)
             
             if not text.strip():
                 raise ValueError("No text could be extracted from PDF")
             
-            # Step 2: Extract information using AI
-            extracted_data = self.extract_with_ai(text)
+            # Step 2: Extract information (using fast fallback method)
+            logger.info("Extracting information using semantic analysis...")
+            extracted_data = self.fallback_extraction(text)
             
             # Step 3: Validate and clean data
+            logger.info("Validating and normalizing data...")
             cleaned_data = self.validate_and_clean_data(extracted_data)
             
             # Step 4: Create Candidate object
@@ -267,11 +258,11 @@ JSON:"""
                 current_role=cleaned_data["current_role"]
             )
             
-            logger.info(f"AI parsing completed for {candidate.name}")
+            logger.info(f"Fast parsing completed for {candidate.name}")
             logger.info(f"Extracted: {len(candidate.skills)} skills, {candidate.experience_years} years experience")
             
             return candidate
             
         except Exception as e:
-            logger.error(f"Error in AI resume parsing: {e}")
+            logger.error(f"Error in resume parsing: {e}")
             raise

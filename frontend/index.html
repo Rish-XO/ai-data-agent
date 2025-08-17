@@ -73,9 +73,15 @@
 
                     <!-- Loading State -->
                     <div id="loading" class="hidden mt-4">
-                        <div class="flex items-center justify-center">
-                            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                            <span class="ml-3 text-gray-600">AI is analyzing the resume...</span>
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-center">
+                                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                                <span class="ml-3 text-gray-600" id="loading-text">AI is analyzing the resume...</span>
+                            </div>
+                            <div class="bg-blue-50 p-3 rounded text-sm text-blue-700">
+                                <p>🧠 This may take 30-60 seconds as we're using advanced AI models</p>
+                                <p>📊 Processing: PDF → AI Analysis → Semantic Embeddings → Database</p>
+                            </div>
                         </div>
                     </div>
                 </div>

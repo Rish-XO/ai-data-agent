@@ -105,10 +105,17 @@ async function uploadResume() {
     document.getElementById('results').innerHTML = '';
     
     try {
+        // Set longer timeout for AI processing
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minutes
+        
         const response = await fetch(`${API_URL}/upload-resume`, {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: controller.signal
         });
+        
+        clearTimeout(timeoutId);
         
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
