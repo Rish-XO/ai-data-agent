@@ -22,17 +22,16 @@ class AIResumeParser:
     """AI-powered resume parser using LangChain and HuggingFace"""
     
     def __init__(self):
-        # Initialize faster AI model for text understanding
+        # Initialize code generation model for structured output
         try:
-            # Use a smaller, faster model for text generation
+            # Use CodeT5 - specifically designed for code/JSON generation
             self.text_generator = pipeline(
                 "text2text-generation",
-                model="google/flan-t5-base",
+                model="Salesforce/codet5-small",
                 max_length=256,
-                temperature=0.3,
                 do_sample=False  # Deterministic output
             )
-            logger.info("Fast AI model (FLAN-T5-base) loaded successfully")
+            logger.info("Code generation model (CodeT5-small) loaded successfully")
         except Exception as e:
             logger.warning(f"Could not load AI model: {e}. Using fallback extraction.")
             self.text_generator = None
@@ -106,18 +105,15 @@ JSON:"""
             # Limit text size for model processing
             text_sample = text[:1000]  # First 1000 chars for FLAN-T5
             
-            # Create better structured prompt for FLAN-T5 with example
-            prompt = f"""Convert resume to JSON format. Output ONLY valid JSON, nothing else.
+            # Create code generation prompt for CodeT5
+            prompt = f"""Generate JSON from resume text:
 
-Example Input: John Doe, john@email.com, 5 years experience, Software Engineer
-Example Output: {{"name":"John Doe","email":"john@email.com","experience_years":5,"current_role":"Software Engineer"}}
+Resume: {text_sample[:400]}
 
-Resume Text: {text_sample[:500]}
-
-JSON Output:"""
+JSON:"""
             
-            # Generate response with FLAN-T5
-            logger.info("Generating AI response with FLAN-T5...")
+            # Generate response with CodeT5
+            logger.info("Generating AI response with CodeT5...")
             response = self.text_generator(
                 prompt,
                 max_length=200,
