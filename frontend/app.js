@@ -122,7 +122,7 @@ async function uploadResume() {
         }
         
         const data = await response.json();
-        displayResults(data.candidate);
+        displayResults(data.candidate, data.extraction_method);
         
         // Show success message
         showNotification('Resume parsed successfully!', 'success');
@@ -145,14 +145,34 @@ async function uploadResume() {
 }
 
 // Display Results
-function displayResults(candidate) {
+function displayResults(candidate, extractionMethod = 'Unknown') {
+    // Determine badge color and icon based on extraction method
+    let badgeClass = 'bg-gray-100 text-gray-700';
+    let badgeIcon = 'fa-question-circle';
+    let badgeText = extractionMethod;
+    
+    if (extractionMethod.includes('AI + Embeddings')) {
+        badgeClass = 'bg-green-100 text-green-700';
+        badgeIcon = 'fa-brain';
+        badgeText = '🧠 AI + Embeddings';
+    } else if (extractionMethod.includes('Fallback')) {
+        badgeClass = 'bg-yellow-100 text-yellow-700';
+        badgeIcon = 'fa-exclamation-triangle';
+        badgeText = '⚡ Fast Extraction (Fallback)';
+    }
+    
     const resultsHtml = `
         <div class="space-y-4">
             <div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
-                <p class="text-green-700 text-sm">
-                    <i class="fas fa-check-circle mr-2"></i>
-                    AI successfully extracted information
-                </p>
+                <div class="flex justify-between items-center">
+                    <p class="text-green-700 text-sm">
+                        <i class="fas fa-check-circle mr-2"></i>
+                        Successfully extracted information
+                    </p>
+                    <span class="px-3 py-1 rounded-full text-xs font-medium ${badgeClass}">
+                        ${badgeText}
+                    </span>
+                </div>
             </div>
             
             <div class="border-b pb-3">

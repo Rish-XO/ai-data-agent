@@ -67,7 +67,7 @@ async def upload_resume(file: UploadFile = File(...)):
         
         # Parse resume
         logger.info(f"Parsing resume: {file.filename}")
-        candidate = parser.parse_resume(str(temp_file))
+        candidate, extraction_method = parser.parse_resume(str(temp_file))
         
         # Save to database
         saved_candidate = db.save_candidate(candidate)
@@ -77,7 +77,8 @@ async def upload_resume(file: UploadFile = File(...)):
         
         return {
             "message": "Resume parsed successfully",
-            "candidate": saved_candidate
+            "candidate": saved_candidate,
+            "extraction_method": extraction_method
         }
         
     except Exception as e:

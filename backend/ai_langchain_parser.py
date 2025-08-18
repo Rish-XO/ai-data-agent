@@ -1,5 +1,6 @@
 import json
 import re
+import os
 from typing import List, Dict, Any
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -9,6 +10,10 @@ from models import Candidate
 from config import HUGGINGFACE_API_TOKEN
 from embeddings_manager import embeddings_manager
 import logging
+
+# Set cache directory to prevent re-downloads
+os.environ['HF_HOME'] = './hf_cache'
+os.environ['TRANSFORMERS_CACHE'] = './hf_cache'
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -94,20 +99,22 @@ JSON:"""
     def extract_with_ai(self, text: str) -> Dict[str, Any]:
         """Extract information using AI model (FLAN-T5)"""
         if not self.text_generator:
+            self.extraction_method = "Fallback (No AI Model)"
             return self.fallback_extraction(text)
         
         try:
             # Limit text size for model processing
             text_sample = text[:1000]  # First 1000 chars for FLAN-T5
             
-            # Create structured prompt for FLAN-T5
-            prompt = f"""Extract information from this resume text and return as JSON:
+            # Create better structured prompt for FLAN-T5 with example
+            prompt = f"""Convert resume to JSON format. Output ONLY valid JSON, nothing else.
 
-Text: {text_sample}
+Example Input: John Doe, john@email.com, 5 years experience, Software Engineer
+Example Output: {{"name":"John Doe","email":"john@email.com","experience_years":5,"current_role":"Software Engineer"}}
 
-Extract: name, email, phone, years of experience, current job title, technical skills
+Resume Text: {text_sample[:500]}
 
-Format as JSON:"""
+JSON Output:"""
             
             # Generate response with FLAN-T5
             logger.info("Generating AI response with FLAN-T5...")
@@ -119,7 +126,10 @@ Format as JSON:"""
             
             # Extract the generated text
             generated_text = response[0]['generated_text']
-            logger.info(f"AI generated: {generated_text[:100]}...")
+            logger.info(f"AI generated: {generated_text[:200]}...")
+            
+            # Log the raw response for debugging
+            logger.debug(f"Full AI response: {generated_text}")
             
             # Try to find and parse JSON
             json_start = generated_text.find('{')
@@ -142,16 +152,20 @@ Format as JSON:"""
                         extracted_data['skills'] = embeddings_manager.normalize_skills(all_skills)
                         logger.info(f"Enhanced skills with embeddings: {len(extracted_data['skills'])} total")
                     
+                    self.extraction_method = "AI + Embeddings"
                     return extracted_data
                 except json.JSONDecodeError:
                     logger.warning("Invalid JSON from AI, using fallback")
+                    self.extraction_method = "Fallback (AI JSON Error)"
                     return self.fallback_extraction(text)
             else:
                 logger.warning("No JSON found in AI response, using fallback")
+                self.extraction_method = "Fallback (No AI JSON)"
                 return self.fallback_extraction(text)
                 
         except Exception as e:
             logger.error(f"AI extraction failed: {e}, using fallback")
+            self.extraction_method = "Fallback (AI Error)"
             return self.fallback_extraction(text)
     
     def fallback_extraction(self, text: str) -> Dict[str, Any]:
@@ -216,6 +230,8 @@ Format as JSON:"""
             r'(\d+)\+?\s*years?\s*(?:of\s*)?experience',
             r'experience\s*:?\s*(\d+)\+?\s*years?',
             r'(\d+)\+?\s*years?\s*(?:in|with|of|working)',
+            r'(\d+)\s*years?\s*experience',  # Simple "2 years experience"
+            r'(\d+)\s*year',  # Even simpler "2 year"
             r'over\s*(\d+)\s*years?',
             r'(\d+)\s*years?\s*(?:in\s*)?(?:software|development|programming|tech)',
             r'total\s*(?:of\s*)?(\d+)\s*years?',
@@ -278,7 +294,7 @@ Format as JSON:"""
         
         return data
     
-    def parse_resume(self, pdf_path: str) -> Candidate:
+    def parse_resume(self, pdf_path: str) -> tuple[Candidate, str]:
         """Main method to parse resume using AI and return Candidate object"""
         try:
             logger.info(f"Starting AI-powered resume parsing for: {pdf_path}")
@@ -311,7 +327,9 @@ Format as JSON:"""
             logger.info(f"Fast parsing completed for {candidate.name}")
             logger.info(f"Extracted: {len(candidate.skills)} skills, {candidate.experience_years} years experience")
             
-            return candidate
+            # Return both candidate and extraction method
+            extraction_method = getattr(self, 'extraction_method', 'Unknown')
+            return candidate, extraction_method
             
         except Exception as e:
             logger.error(f"Error in resume parsing: {e}")
