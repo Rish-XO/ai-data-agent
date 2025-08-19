@@ -15,8 +15,18 @@ import logging
 os.environ['HF_HOME'] = './hf_cache'
 os.environ['TRANSFORMERS_CACHE'] = './hf_cache'
 
+# Suppress verbose logging from transformers and sentence-transformers
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'  # Avoid warnings
+
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Suppress batch progress bars from sentence-transformers
+logging.getLogger('sentence_transformers').setLevel(logging.WARNING)
+logging.getLogger('transformers').setLevel(logging.WARNING)
+logging.getLogger('transformers.modeling_utils').setLevel(logging.ERROR)
 
 class AIResumeParser:
     """AI-powered resume parser using LangChain and HuggingFace"""
@@ -24,16 +34,19 @@ class AIResumeParser:
     def __init__(self):
         # Initialize code generation model for structured output
         try:
+            logger.info("Loading CodeT5-small model...")
             # Use CodeT5 - specifically designed for code/JSON generation
             self.text_generator = pipeline(
                 "text2text-generation",
                 model="Salesforce/codet5-small",
                 max_length=256,
-                do_sample=False  # Deterministic output
+                do_sample=False,  # Deterministic output
+                device=-1  # Use CPU to avoid GPU issues
             )
-            logger.info("Code generation model (CodeT5-small) loaded successfully")
+            logger.info("✅ Code generation model (CodeT5-small) loaded successfully")
         except Exception as e:
-            logger.warning(f"Could not load AI model: {e}. Using fallback extraction.")
+            logger.error(f"❌ Could not load AI model: {e}")
+            logger.info("📋 Using fallback extraction mode")
             self.text_generator = None
         
         # Initialize text splitter for large documents
@@ -80,14 +93,33 @@ JSON:"""
             
             # Combine all pages
             full_text = ""
-            for doc in documents:
-                full_text += doc.page_content + "\n"
+            for i, doc in enumerate(documents):
+                page_content = doc.page_content
+                full_text += page_content + "\n"
+                logger.debug(f"Page {i+1} content length: {len(page_content)} chars")
             
-            logger.info(f"Loaded PDF with {len(documents)} pages")
+            # Log extraction details
+            logger.info(f"📄 PDF Extraction Summary:")
+            logger.info(f"   • Pages: {len(documents)}")
+            logger.info(f"   • Total text length: {len(full_text)} characters")
+            logger.info(f"   • Contains @ (email): {'@' in full_text}")
+            
+            # Check for phone patterns (moved outside f-string)
+            phone_pattern = r'\d{3}[-.]?\d{3}[-.]?\d{4}'
+            has_phone = bool(re.search(phone_pattern, full_text))
+            logger.info(f"   • Contains phone patterns: {has_phone}")
+            
+            # Show sample of extracted text
+            sample_text = full_text[:500].replace('\n', ' ').strip()
+            logger.info(f"📝 First 500 chars: '{sample_text}...'")
+            
+            if len(full_text.strip()) == 0:
+                logger.warning("⚠️  WARNING: Extracted text is empty!")
+                
             return full_text
             
         except Exception as e:
-            logger.error(f"Error loading PDF with LangChain: {e}")
+            logger.error(f"❌ Error loading PDF with LangChain: {e}")
             raise
     
     def chunk_text_with_langchain(self, text: str) -> List[str]:
@@ -96,28 +128,46 @@ JSON:"""
         return [doc.page_content for doc in docs]
     
     def extract_with_ai(self, text: str) -> Dict[str, Any]:
-        """Extract information using AI model (FLAN-T5)"""
+        """Extract information using AI model (CodeT5)"""
         if not self.text_generator:
             self.extraction_method = "Fallback (No AI Model)"
             return self.fallback_extraction(text)
         
         try:
             # Limit text size for model processing
-            text_sample = text[:1000]  # First 1000 chars for FLAN-T5
+            text_sample = text[:800]  # Reduce for better processing
             
-            # Create code generation prompt for CodeT5
-            prompt = f"""Generate JSON from resume text:
+            # Log what the AI will actually process
+            logger.info(f"🤖 AI Input Summary:")
+            logger.info(f"   • Text sample length: {len(text_sample)} chars")
+            # Check for name patterns (moved outside f-string)
+            name_pattern = r'[A-Z][a-z]+ [A-Z][a-z]+'
+            has_name_pattern = bool(re.search(name_pattern, text_sample))
+            logger.info(f"   • Sample contains name-like patterns: {has_name_pattern}")
+            logger.info(f"   • Sample text: '{text_sample[:200].replace(chr(10), ' ').strip()}...'")
+            
+            # Create instruction prompt without template
+            prompt = f"""Extract the following from this resume and output as JSON:
+- name (the person's full name)
+- email (email address if present)
+- phone (phone number if present)
+- skills (array of technical skills mentioned)
+- experience_years (total years of work experience as a number)
+- current_role (current job title if mentioned)
 
-Resume: {text_sample[:400]}
+Resume:
+{text_sample[:500]}
 
-JSON:"""
+Output JSON:"""
             
             # Generate response with CodeT5
             logger.info("Generating AI response with CodeT5...")
             response = self.text_generator(
                 prompt,
-                max_length=200,
-                num_return_sequences=1
+                max_length=150,
+                num_return_sequences=1,
+                temperature=0.1,  # More deterministic
+                pad_token_id=self.text_generator.tokenizer.eos_token_id
             )
             
             # Extract the generated text
@@ -127,31 +177,63 @@ JSON:"""
             # Log the raw response for debugging
             logger.debug(f"Full AI response: {generated_text}")
             
+            # Extract only the generated content (after the prompt)
+            # CodeT5 may include the prompt in output, so remove it
+            if prompt in generated_text:
+                generated_content = generated_text[len(prompt):]
+            else:
+                generated_content = generated_text
+            
+            # Clean up the response
+            full_json = generated_content.strip()
+            
             # Try to find and parse JSON
-            json_start = generated_text.find('{')
-            json_end = generated_text.rfind('}') + 1
+            json_start = full_json.find('{')
+            json_end = full_json.rfind('}') + 1
             
             if json_start != -1 and json_end > json_start:
-                json_str = generated_text[json_start:json_end]
+                json_str = full_json[json_start:json_end]
+                
+                # Clean up common CodeT5 artifacts
+                json_str = json_str.replace(':::', '').replace('...', '').strip()
+                
                 try:
                     extracted_data = json.loads(json_str)
                     logger.info("AI extraction successful")
                     
+                    # Validate extracted data structure
+                    if not isinstance(extracted_data, dict):
+                        raise ValueError("Generated data is not a dictionary")
+                    
+                    # Ensure required fields with defaults
+                    extracted_data = {
+                        "name": extracted_data.get("name", "Unknown"),
+                        "email": extracted_data.get("email"),
+                        "phone": extracted_data.get("phone"),
+                        "skills": extracted_data.get("skills", []),
+                        "experience_years": extracted_data.get("experience_years", 0),
+                        "current_role": extracted_data.get("current_role")
+                    }
+                    
                     # Enhance with semantic skill extraction
-                    if extracted_data.get('skills'):
-                        # Use AI-extracted skills as base, then enhance with embeddings
-                        ai_skills = extracted_data['skills'] if isinstance(extracted_data['skills'], list) else [extracted_data['skills']]
-                        semantic_skills = embeddings_manager.extract_skills_semantic(text, threshold=0.7)
-                        
-                        # Combine and normalize
+                    semantic_skills = embeddings_manager.extract_skills_semantic(text, threshold=0.7)
+                    
+                    if extracted_data.get('skills') and isinstance(extracted_data['skills'], list):
+                        # Combine AI skills with semantic skills
+                        ai_skills = extracted_data['skills']
                         all_skills = list(set(ai_skills + semantic_skills))
-                        extracted_data['skills'] = embeddings_manager.normalize_skills(all_skills)
-                        logger.info(f"Enhanced skills with embeddings: {len(extracted_data['skills'])} total")
+                    else:
+                        # Use only semantic skills if AI didn't extract skills properly
+                        all_skills = semantic_skills
+                    
+                    extracted_data['skills'] = embeddings_manager.normalize_skills(all_skills)
+                    logger.info(f"Enhanced skills with embeddings: {len(extracted_data['skills'])} total")
                     
                     self.extraction_method = "AI + Embeddings"
                     return extracted_data
-                except json.JSONDecodeError:
-                    logger.warning("Invalid JSON from AI, using fallback")
+                    
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Invalid JSON from AI ({e}), using fallback")
                     self.extraction_method = "Fallback (AI JSON Error)"
                     return self.fallback_extraction(text)
             else:
